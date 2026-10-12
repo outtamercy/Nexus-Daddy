@@ -40,10 +40,10 @@ def _blob(data: bytes) -> tuple[_DataBlob, object]:
     return _DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte))), buffer
 
 
-def _protect(clear: bytes) -> bytes:
+def _protect(clear: bytes, description: str) -> bytes:
     incoming, keepalive = _blob(clear)
     outgoing = _DataBlob()
-    if not _crypt32.CryptProtectData(ctypes.byref(incoming), "Nexus Daddy API key", None, None, None, _UI_FORBIDDEN, ctypes.byref(outgoing)):
+    if not _crypt32.CryptProtectData(ctypes.byref(incoming), description, None, None, None, _UI_FORBIDDEN, ctypes.byref(outgoing)):
         raise ctypes.WinError(ctypes.get_last_error())
     try:
         return ctypes.string_at(outgoing.pbData, outgoing.cbData)
@@ -66,11 +66,12 @@ def _unprotect(sealed: bytes) -> bytes:
 
 
 class Vault:
-    """One encrypted key plus an explicit per-requester allow list."""
+    """Separate encrypted credentials with deliberately separate allow lists."""
 
     # Package Daddy is our first-party downloader. Show it before it asks,
     # otherwise first-run setup turns into a dumb chicken-and-egg trap.
     _KNOWN_REQUESTERS = ("Package Daddy",)
+    _KNOWN_GITHUB_REQUESTERS = ("Package Daddy",)
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -79,10 +80,15 @@ class Vault:
 
     def _seed_known_requesters(self) -> None:
         permissions = self._permissions()
+        github_permissions = self._github_permissions()
         changed = False
         for requester in self._KNOWN_REQUESTERS:
             if requester not in permissions:
                 permissions[requester] = False
+                changed = True
+        for requester in self._KNOWN_GITHUB_REQUESTERS:
+            if requester not in github_permissions:
+                github_permissions[requester] = False
                 changed = True
         if changed:
             self._save()
@@ -108,7 +114,7 @@ class Vault:
         clean = (key or "").strip()
         if not clean:
             raise ValueError("No API key was entered.")
-        self._raw["sealed_key"] = base64.b64encode(_protect(clean.encode("utf-8"))).decode("ascii")
+        self._raw["sealed_key"] = base64.b64encode(_protect(clean.encode("utf-8"), "Nexus Daddy API key")).decode("ascii")
         self._save()
 
     def clear(self) -> None:
@@ -117,6 +123,10 @@ class Vault:
 
     def _permissions(self) -> dict:
         permissions = self._raw.setdefault("permissions", {})
+        return permissions if isinstance(permissions, dict) else {}
+
+    def _github_permissions(self) -> dict:
+        permissions = self._raw.setdefault("github_permissions", {})
         return permissions if isinstance(permissions, dict) else {}
 
     def request(self, requester: str) -> bool:
@@ -139,6 +149,87 @@ class Vault:
             return ""
         try:
             sealed = base64.b64decode(self._raw["sealed_key"].encode("ascii"))
+            return _unprotect(sealed).decode("utf-8").strip()
+        except (OSError, ValueError, UnicodeDecodeError):
+            return ""
+
+    @property
+    def has_github_token(self) -> bool:
+        return bool(self._raw.get("sealed_github_token"))
+
+    def store_github_token(self, token: str) -> None:
+        clean = (token or "").strip()
+        if not clean:
+            raise ValueError("No GitHub token was entered.")
+        if not clean.startswith(("github_pat_", "ghp_")):
+            raise ValueError("That does not look like a GitHub personal access token.")
+        self._raw["sealed_github_token"] = base64.b64encode(
+            _protect(clean.encode("utf-8"), "Nexus Daddy GitHub catalog token")
+        ).decode("ascii")
+        self._save()
+
+    def clear_github_token(self) -> None:
+        self._raw.pop("sealed_github_token", None)
+        self._save()
+
+    def request_github(self, requester: str) -> bool:
+        name = (requester or "").strip() or "Unnamed plugin"
+        permissions = self._github_permissions()
+        if name not in permissions:
+            permissions[name] = False
+            self._save()
+        return permissions.get(name) is True
+
+    def set_github_allowed(self, requester: str, allowed: bool) -> None:
+        self._github_permissions()[(requester or "").strip() or "Unnamed plugin"] = bool(allowed)
+        self._save()
+
+    def github_permissions(self) -> dict[str, bool]:
+        return {str(name): bool(value) for name, value in self._github_permissions().items()}
+
+    def github_token_for(self, requester: str) -> str:
+        if not self.has_github_token or not self.request_github(requester):
+            return ""
+        try:
+            sealed = base64.b64decode(self._raw["sealed_github_token"].encode("ascii"))
+            return _unprotect(sealed).decode("utf-8").strip()
+        except (OSError, ValueError, UnicodeDecodeError):
+            return ""
+
+    @property
+    def github_oauth_client_id(self) -> str:
+        value = self._raw.get("github_oauth_client_id", "")
+        return value.strip() if isinstance(value, str) else ""
+
+    @property
+    def has_github_contributor_token(self) -> bool:
+        return bool(self._raw.get("sealed_github_contributor_token"))
+
+    def set_github_oauth_client_id(self, client_id: str) -> None:
+        clean = (client_id or "").strip()
+        if not clean.startswith(("Ov", "Iv")) or len(clean) < 12:
+            raise ValueError("That does not look like a GitHub OAuth app client ID.")
+        self._raw["github_oauth_client_id"] = clean
+        self._save()
+
+    def store_github_contributor_token(self, token: str) -> None:
+        clean = (token or "").strip()
+        if not clean.startswith(("gho_", "ghu_")):
+            raise ValueError("GitHub did not return a normal OAuth user token.")
+        self._raw["sealed_github_contributor_token"] = base64.b64encode(
+            _protect(clean.encode("utf-8"), "Nexus Daddy GitHub contributor token")
+        ).decode("ascii")
+        self._save()
+
+    def clear_github_contributor_token(self) -> None:
+        self._raw.pop("sealed_github_contributor_token", None)
+        self._save()
+
+    def github_contributor_token_for(self, requester: str) -> str:
+        if not self.has_github_contributor_token or not self.request_github(requester):
+            return ""
+        try:
+            sealed = base64.b64decode(self._raw["sealed_github_contributor_token"].encode("ascii"))
             return _unprotect(sealed).decode("utf-8").strip()
         except (OSError, ValueError, UnicodeDecodeError):
             return ""

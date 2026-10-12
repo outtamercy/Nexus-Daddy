@@ -16,7 +16,10 @@ from .vault import Vault
 
 GRAPHQL = "https://api.nexusmods.com/v2/graphql"
 APPLICATION_NAME = "Nexus Daddy"
-APPLICATION_VERSION = "0.2.0"
+APPLICATION_VERSION = "2.0.0"
+# Public OAuth app identity, not a secret. This lets contributors use P Daddy's
+# device sign-in without having to hand-configure N Daddy first.
+GITHUB_OAUTH_CLIENT_ID = "Ov23li9RR7ZzNJeWSuqV"
 
 
 class NexusDaddyError(RuntimeError):
@@ -52,6 +55,23 @@ def vault(organizer) -> Vault:
 
 def key(organizer, requester: str) -> str:
     return vault(organizer).key_for(requester)
+
+
+def github_token(organizer, requester: str) -> str:
+    """Return a separately allowed GitHub catalog token, never the Nexus key."""
+    return vault(organizer).github_token_for(requester)
+
+
+def github_oauth_client_id(organizer) -> str:
+    return vault(organizer).github_oauth_client_id or GITHUB_OAUTH_CLIENT_ID
+
+
+def github_contributor_token(organizer, requester: str) -> str:
+    return vault(organizer).github_contributor_token_for(requester)
+
+
+def store_github_contributor_token(organizer, token: str) -> None:
+    vault(organizer).store_github_contributor_token(token)
 
 
 class NexusClient:
@@ -142,6 +162,15 @@ class NexusClient:
         )
         files = parsed.get("files") or []
         return [entry for entry in files if isinstance(entry, dict)]
+
+    def mod(self, game_domain: str, mod_id: int) -> dict:
+        """Return Nexus's mod record for MO2 metadata after a real download."""
+        self._require_key()
+        parsed = self._request_json(
+            f"https://api.nexusmods.com/v1/games/{game_domain}/mods/{int(mod_id)}.json",
+            headers={"apikey": self.api_key},
+        )
+        return parsed if isinstance(parsed, dict) else {}
 
     def download_links(self, game_domain: str, mod_id: int, file_id: int) -> list[str]:
         """Ask Nexus for this user's permitted CDN link(s), without guessing."""

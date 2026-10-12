@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QLabel,
-                             QLineEdit, QMessageBox, QPushButton, QTableWidget,
+                             QFileDialog, QInputDialog, QLineEdit, QMessageBox, QPushButton, QTableWidget,
                              QTableWidgetItem, QVBoxLayout)
 
 import mobase
@@ -34,7 +34,7 @@ class NexusDaddyWindow(QDialog):
         self.organizer = organizer
         self.store = api.vault(organizer)
         self.setWindowTitle("Nexus Daddy — Nexus API Companion")
-        self.resize(760, 480)
+        self.resize(760, 650)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Nexus Daddy uses MO2's Qt network stack and keeps TLS certificate verification on."))
         layout.addWidget(QLabel("Public v2 lookups need no key. A key is only handed to a plugin after you allow that plugin below."))
@@ -50,9 +50,28 @@ class NexusDaddyWindow(QDialog):
         test = QPushButton("Test public Nexus access", self); test.clicked.connect(self.test_public)
         key_actions.addWidget(save); key_actions.addWidget(clear); key_actions.addWidget(test); key_actions.addStretch(1)
         layout.addLayout(key_actions)
+        layout.addWidget(QLabel("GitHub catalog token — separate from the Nexus key; only allowed plugins can ask for it."))
+        self.github_box = QLineEdit(self)
+        self.github_box.setPlaceholderText("Paste a fine-grained GitHub token limited to Package-Daddy-Catalog")
+        self.github_box.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.github_box)
+        github_actions = QHBoxLayout()
+        save_github = QPushButton("Store GitHub token", self); save_github.clicked.connect(self.save_github_token)
+        clear_github = QPushButton("Remove GitHub token", self); clear_github.clicked.connect(self.clear_github_token)
+        github_actions.addWidget(save_github); github_actions.addWidget(clear_github); github_actions.addStretch(1)
+        layout.addLayout(github_actions)
+        self.github_oauth_client_box = QLineEdit(self)
+        self.github_oauth_client_box.setPlaceholderText("GitHub OAuth app client ID (needed only for contributor sign-in)")
+        self.github_oauth_client_box.setText(self.store.github_oauth_client_id)
+        layout.addWidget(self.github_oauth_client_box)
+        oauth_actions = QHBoxLayout()
+        save_oauth = QPushButton("Save contributor login app ID", self); save_oauth.clicked.connect(self.save_github_oauth_client_id)
+        clear_contributor = QPushButton("Disconnect contributor GitHub", self); clear_contributor.clicked.connect(self.clear_github_contributor_token)
+        oauth_actions.addWidget(save_oauth); oauth_actions.addWidget(clear_contributor); oauth_actions.addStretch(1)
+        layout.addLayout(oauth_actions)
         layout.addWidget(QLabel("Plugins that have asked for the stored key"))
-        self.table = QTableWidget(0, 2, self)
-        self.table.setHorizontalHeaderLabels(("Plugin", "Allowed"))
+        self.table = QTableWidget(0, 3, self)
+        self.table.setHorizontalHeaderLabels(("Plugin", "Nexus key", "GitHub catalog"))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setColumnWidth(0, 185)
@@ -60,18 +79,23 @@ class NexusDaddyWindow(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
         permissions = QHBoxLayout()
+        add_plugin = QPushButton("Add plugin…", self); add_plugin.clicked.connect(self.add_plugin)
         allow = QPushButton("Allow selected", self); allow.clicked.connect(lambda: self.set_selected(True))
         deny = QPushButton("Deny selected", self); deny.clicked.connect(lambda: self.set_selected(False))
         close = QPushButton("Close", self); close.clicked.connect(self.close)
-        permissions.addWidget(allow); permissions.addWidget(deny); permissions.addStretch(1); permissions.addWidget(close)
+        permissions.addWidget(add_plugin); permissions.addWidget(allow); permissions.addWidget(deny); permissions.addStretch(1); permissions.addWidget(close)
         layout.addLayout(permissions)
         self.refresh()
 
     def refresh(self):
-        self.state.setText("Nexus key is locked up with Windows." if self.store.has_key else "No Nexus key stored. Public lookups still work fine.")
-        entries = sorted(self.store.permissions().items(), key=lambda item: item[0].lower())
+        nexus_state = "Nexus key is locked up with Windows." if self.store.has_key else "No Nexus key stored. Public lookups still work fine."
+        github_state = "GitHub catalog token is locked up with Windows." if self.store.has_github_token else "No GitHub catalog token stored."
+        self.state.setText(nexus_state + " " + github_state)
+        nexus_permissions = self.store.permissions()
+        github_permissions = self.store.github_permissions()
+        entries = sorted(set(nexus_permissions) | set(github_permissions), key=str.lower)
         self.table.setRowCount(len(entries))
-        for row, (name, allowed) in enumerate(entries):
+        for row, name in enumerate(entries):
             plugin_item = QTableWidgetItem()
             plugin_item.setData(Qt.ItemDataRole.UserRole, name)
             icon = requester_icon(name)
@@ -82,7 +106,8 @@ class NexusDaddyWindow(QDialog):
             else:
                 plugin_item.setText(name)
             self.table.setItem(row, 0, plugin_item)
-            self.table.setItem(row, 1, QTableWidgetItem("Allowed" if allowed else "Denied / awaiting approval"))
+            self.table.setItem(row, 1, QTableWidgetItem("Allowed" if nexus_permissions.get(name) else "Denied / awaiting approval"))
+            self.table.setItem(row, 2, QTableWidgetItem("Allowed" if github_permissions.get(name) else "Denied / awaiting approval"))
 
     def save_key(self):
         try:
@@ -97,6 +122,31 @@ class NexusDaddyWindow(QDialog):
         self.store.clear()
         self.refresh()
 
+    def save_github_token(self):
+        try:
+            self.store.store_github_token(self.github_box.text())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Nexus Daddy", str(exc))
+            return
+        self.github_box.clear()
+        self.refresh()
+
+    def clear_github_token(self):
+        self.store.clear_github_token()
+        self.refresh()
+
+    def save_github_oauth_client_id(self):
+        try:
+            self.store.set_github_oauth_client_id(self.github_oauth_client_box.text())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Nexus Daddy", str(exc))
+            return
+        self.refresh()
+
+    def clear_github_contributor_token(self):
+        self.store.clear_github_contributor_token()
+        self.refresh()
+
     def set_selected(self, allowed: bool):
         row = self.table.currentRow()
         item = self.table.item(row, 0) if row >= 0 else None
@@ -107,8 +157,49 @@ class NexusDaddyWindow(QDialog):
         if not isinstance(name, str) or not name:
             QMessageBox.warning(self, "Nexus Daddy", "That plugin row lost its permission name somehow. Pick it again.")
             return
-        self.store.set_allowed(name, allowed)
+        column = self.table.currentColumn()
+        if column == 2:
+            self.store.set_github_allowed(name, allowed)
+        else:
+            self.store.set_allowed(name, allowed)
         self.refresh()
+
+    def add_plugin(self):
+        """Put a local MO2 Python plugin in the permission list, denied first."""
+        plugins_root = Path(__file__).parent.parent
+        filename, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Add an MO2 plugin to Nexus Daddy",
+            str(plugins_root),
+            "MO2 Python plugin (*.py)",
+        )
+        if not filename:
+            return
+        selected = Path(filename)
+        if selected.suffix.casefold() != ".py" or not selected.is_file():
+            QMessageBox.warning(self, "Nexus Daddy", "Pick a real local .py plugin file, not some random mystery blob.")
+            return
+        default_name = selected.stem
+        requester, accepted = QInputDialog.getText(
+            self,
+            "Plugin permission name",
+            "Permission name this plugin uses when it asks Nexus Daddy for access:\n"
+            "(Usually its display/plugin name; it must match exactly.)",
+            text=default_name,
+        )
+        requester = requester.strip()
+        if not accepted or not requester:
+            return
+        # Adding never grants a secret.  It creates visible denied rows so the
+        # user deliberately chooses Nexus and/or GitHub permission afterward.
+        self.store.set_allowed(requester, False)
+        self.store.set_github_allowed(requester, False)
+        self.refresh()
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == requester:
+                self.table.selectRow(row)
+                break
 
     def test_public(self):
         try:
@@ -130,7 +221,7 @@ class NexusDaddyPlugin(mobase.IPluginTool):
     def name(self): return "NexusDaddy"
     def author(self): return "outtamercy"
     def description(self): return "A first-party, Qt-network Nexus companion for MO2 plugins."
-    def version(self): return mobase.VersionInfo("0.2.0", mobase.VersionScheme.DISCOVER)
+    def version(self): return mobase.VersionInfo("2.0.0", mobase.VersionScheme.DISCOVER)
     def isActive(self): return True
     def settings(self): return []
     def displayName(self): return "Nexus Daddy"
