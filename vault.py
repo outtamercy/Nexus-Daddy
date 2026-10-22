@@ -208,7 +208,7 @@ class Vault:
     def set_github_oauth_client_id(self, client_id: str) -> None:
         clean = (client_id or "").strip()
         if not clean.startswith(("Ov", "Iv")) or len(clean) < 12:
-            raise ValueError("That does not look like a GitHub OAuth app client ID.")
+            raise ValueError("That does not look like a GitHub App client ID.")
         self._raw["github_oauth_client_id"] = clean
         self._save()
 

@@ -61,7 +61,7 @@ class NexusDaddyWindow(QDialog):
         github_actions.addWidget(save_github); github_actions.addWidget(clear_github); github_actions.addStretch(1)
         layout.addLayout(github_actions)
         self.github_oauth_client_box = QLineEdit(self)
-        self.github_oauth_client_box.setPlaceholderText("GitHub OAuth app client ID (needed only for contributor sign-in)")
+        self.github_oauth_client_box.setPlaceholderText("GitHub App client ID (needed only for contributor sign-in)")
         self.github_oauth_client_box.setText(self.store.github_oauth_client_id)
         layout.addWidget(self.github_oauth_client_box)
         oauth_actions = QHBoxLayout()
